@@ -4,6 +4,7 @@ import os
 from tqdm import tqdm
 from utils import listdirs, analyze_symmetry, split_poscars, parse_ech
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.core.structure import IStructure
 from inputs import *
 
@@ -54,7 +55,7 @@ def main():
                             'formula': formula,
                             'space_group': space_group,
                             'id': structure["id"],
-                            'stability': stability
+                            'stability': stability,
                                       }
 
                         name = f'EA{structure["id"]}_{stability}_{formula}_{space_group}'
@@ -69,7 +70,7 @@ def main():
                         with open(poscar, 'r') as f:
                             lines = f.readlines()
                         with open(poscar, 'w') as f:
-                            lines[0] = f'EA{structure["id"]} {stability} {formula} {space_group}'
+                            lines[0] = f'EA{structure["id"]} {stability} {formula} {space_group}\n'
                             f.writelines(lines)
                         compose_potcar(tmp_structure, specific_path, dir_name)
                         get_slurm_script(properties, system, dir_name)

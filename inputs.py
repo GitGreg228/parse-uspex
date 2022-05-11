@@ -48,7 +48,7 @@ def get_slurm_script(properties, system, path):
     script = f"""#!/bin/sh
 #SBATCH -o out -e err
 #SBATCH -p {system['partition']}
-#SBATCH -J r{properties['formula']}
+#SBATCH -J r{properties['id']}
 #SBATCH -N {system['N']}
 #SBATCH -n {system['n']}
 
@@ -87,3 +87,9 @@ NPAR = 4
 
     with open(os.path.join(path, 'INCAR'), 'w') as f:
         f.write(incar)
+
+
+def launch_all(zpe_path):
+    script = f"""#!/bin/sh
+
+    """.format()
