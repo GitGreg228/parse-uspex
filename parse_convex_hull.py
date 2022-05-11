@@ -1,45 +1,10 @@
 import argparse
 import os
-import json
 
 from tqdm import tqdm
-from utils import listdirs, Structure, analyze_symmetry, split_poscars
+from utils import listdirs, analyze_symmetry, split_poscars, parse_ech, reduce_structures
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.structure import IStructure
-
-
-def parse_ech(dirname, ths, poscars, tol_min, tol_step, tol_max, dump_dir=''):
-    structures = dict()
-    for category in ['single', 'binary', 'ternary']:
-        structures[category] = {'stable': list()}
-    ths_f = list()
-    for th in ths:
-        for key, value in structures.items():
-            structures[key][str(th)] = list()
-        ths_f.append(float(th))
-    ths_f.sort()
-    max_th = max(ths_f)
-    with open(os.path.join(dirname, 'extended_convex_hull'), 'r') as f:
-        lines = f.readlines()
-    new_structures = dict()
-    for i, line in tqdm(enumerate(lines)):
-        if '[' in line:
-            S = Structure(line)
-            if not S.comp_cat in new_structures:
-                new_structures[S.comp_cat] = dict()
-            stab_cat = S.stability(ths_f)
-            if not stab_cat in new_structures[S.comp_cat]:
-                new_structures[S.comp_cat][stab_cat] = list()
-            _ = S.struc(poscars)
-            _ = S.symm(tol_min, tol_step, tol_max)
-            if S.fit > max_th:
-                break
-            else:
-                new_structures[S.comp_cat][stab_cat].append(S.as_dict())
-    if dump_dir:
-        with open(os.path.join(dump_dir, 'structures.json'), 'w', encoding='utf-8') as f:
-            json.dump(new_structures, f, ensure_ascii=False, indent=4)
-    return new_structures
 
 
 def main():
@@ -65,6 +30,7 @@ def main():
         if not os.path.isdir(poscars_path):
             os.mkdir(poscars_path)
         structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=poscars_path)
+        structures = reduce_structures(structures)
         for comp, value in structures.items():
             comp_path = os.path.join(poscars_path, comp)
             if not os.path.isdir(comp_path):
@@ -95,7 +61,6 @@ def main():
                         if not os.path.isdir(fname):
                             os.mkdir(fname)
                         analyze_symmetry(tmp_structure, args.tol_min, args.tol_step, args.tol_max, save_dir=fname)
-                        # analyzer.get_primitive_standard_structure().to(fmt='poscar', filename=os.path.join(cat_path, fname, 'POSCAR'))
                         with open(os.path.join(fname, 'POSCAR'), 'w') as f:
                             lines = structure['poscar']
                             f.writelines(lines)

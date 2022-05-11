@@ -4,11 +4,13 @@ import json
 import numpy as np
 
 from functools import reduce
+from tqdm import tqdm
 from math import gcd
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.cif import CifWriter
 from pymatgen.core.structure import IStructure
+from pymatgen.analysis.structure_matcher import StructureMatcher
 
 
 def parse_formula(structure):
@@ -207,3 +209,72 @@ def split_poscars(dirname):
     for i in range(len(idxs) - 1):
         poscars[eas[i].replace('EA', '')] = lines[idxs[i]:idxs[i+1]]
     return poscars
+
+
+def reduce_structures(structures):
+    matcher = StructureMatcher()
+    for comp in structures.keys():
+        for cat in structures[comp].keys():
+            if cat != 'stable':
+                for structure in structures[comp][cat]:
+                    for stable_structure in structures[comp]['stable']:
+                        if structure['formula'] == stable_structure['formula'] or comp == 'single':
+                            formula = structure['formula']
+                            fitness = structure['fitness']
+                            s1 = IStructure.from_dict(structure['structure'])
+                            s2 = IStructure.from_dict(stable_structure['structure'])
+                            if matcher.fit(s1, s2):
+                                print(f'{comp} {formula} with fitness {fitness} is the same as stable one')
+                                structures[comp][cat].remove(structure)
+                for i, structure in enumerate(structures[comp][cat]):
+                    for j, other_structure in enumerate(structures[comp][cat]):
+                        if i < j:
+                            if structure['formula'] == other_structure['formula'] or comp == 'single':
+                                f1 = structure['fitness']
+                                f2 = other_structure['fitness']
+                                if f2 > f1:
+                                    formula = structure['formula']
+                                    s1 = IStructure.from_dict(structure['structure'])
+                                    s2 = IStructure.from_dict(other_structure['structure'])
+                                    if matcher.fit(s1, s2):
+                                        print(f'{comp} {formula} with fitness {f2} is the same as another one at {f1}')
+                                        structures[comp][cat].remove(other_structure)
+    return structures
+
+
+def parse_ech(dirname, ths, poscars, tol_min, tol_step, tol_max, dump_dir='', reduce=True):
+    structures = dict()
+    for category in ['single', 'binary', 'ternary']:
+        structures[category] = {'stable': list()}
+    ths_f = list()
+    for th in ths:
+        for key, value in structures.items():
+            structures[key][str(th)] = list()
+        ths_f.append(float(th))
+    ths_f.sort()
+    max_th = max(ths_f)
+    with open(os.path.join(dirname, 'extended_convex_hull'), 'r') as f:
+        lines = f.readlines()
+    new_structures = dict()
+    for i, line in tqdm(enumerate(lines)):
+        if '[' in line:
+            S = Structure(line)
+            if not S.comp_cat in new_structures:
+                new_structures[S.comp_cat] = dict()
+            stab_cat = S.stability(ths_f)
+            if not stab_cat in new_structures[S.comp_cat]:
+                new_structures[S.comp_cat][stab_cat] = list()
+            _ = S.struc(poscars)
+            _ = S.symm(tol_min, tol_step, tol_max)
+            if S.fit > max_th:
+                break
+            else:
+                new_structures[S.comp_cat][stab_cat].append(S.as_dict())
+    if dump_dir:
+        with open(os.path.join(dump_dir, 'structures.json'), 'w', encoding='utf-8') as f:
+            json.dump(new_structures, f, ensure_ascii=False, indent=4)
+    if reduce:
+        return reduce_structures(new_structures)
+    else:
+        return new_structures
+
