@@ -93,4 +93,4 @@ NPAR = 4
 def launch_all(zpe_path):
     script = f"""#!/bin/sh
 
-    """.format()
+""".format()

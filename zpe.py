@@ -2,7 +2,7 @@ import argparse
 import os
 
 from tqdm import tqdm
-from utils import listdirs, analyze_symmetry, split_poscars, parse_ech
+from utils import listdirs, analyze_symmetry, split_poscars, parse_ech, load_ech, collect_zpe, get_convex_hulls
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.core.structure import IStructure
@@ -35,46 +35,52 @@ def main():
         zpe_path = os.path.join(dir, 'ZPE')
         if not os.path.isdir(zpe_path):
             os.mkdir(zpe_path)
-        structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=zpe_path)
-        for comp in structures.keys():
-            # comp_path = os.path.join(zpe_path, comp)
-            # if not os.path.isdir(comp_path):
-            #     os.mkdir(comp_path)
-            for cat in structures[comp].keys():
-                if cat and comp:
-                    print(f'Working with the {comp} {cat} structures')
-                    for structure in structures[comp][cat]:
-                        symmetry = structure['symmetry']
-                        space_group = int(symmetry[list(symmetry)[-1]][0])
-                        formula = structure['formula']
-                        if cat == 'stable':
-                            stability = cat
-                        else:
-                            stability = structure["fitness"]
-                        properties = {
-                            'formula': formula,
-                            'space_group': space_group,
-                            'id': structure["id"],
-                            'stability': stability,
-                                      }
-
-                        name = f'EA{structure["id"]}_{stability}_{formula}_{space_group}'
-                        dir_name = os.path.join(zpe_path, name)
-                        if not os.path.isdir(dir_name):
-                            os.mkdir(dir_name)
-                        tmp_structure = IStructure.from_dict(structure['structure'])
-                        analyzer = SpacegroupAnalyzer(tmp_structure, symprec=args.tol)
-                        primitive = analyzer.get_primitive_standard_structure()
-                        poscar = os.path.join(dir_name, 'POSCAR')
-                        primitive.to(filename=poscar, fmt='POSCAR')
-                        with open(poscar, 'r') as f:
-                            lines = f.readlines()
-                        with open(poscar, 'w') as f:
-                            lines[0] = f'EA{structure["id"]} {stability} {formula} {space_group}\n'
-                            f.writelines(lines)
-                        compose_potcar(tmp_structure, specific_path, dir_name)
-                        get_slurm_script(properties, system, dir_name)
-                        write_incar('relaxation', properties, args.press, dir_name)
+            structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=zpe_path)
+            for comp in structures.keys():
+                # comp_path = os.path.join(zpe_path, comp)
+                # if not os.path.isdir(comp_path):
+                #     os.mkdir(comp_path)
+                for cat in structures[comp].keys():
+                    if cat and comp:
+                        print(f'Working with the {comp} {cat} structures')
+                        for structure in structures[comp][cat]:
+                            symmetry = structure['symmetry']
+                            space_group = int(symmetry[list(symmetry)[-1]][0])
+                            formula = structure['formula']
+                            if cat == 'stable':
+                                stability = cat
+                            else:
+                                stability = structure["fitness"]
+                            properties = {
+                                'formula': formula,
+                                'space_group': space_group,
+                                'id': structure["id"],
+                                'stability': stability,
+                                          }
+                            name = f'EA{structure["id"]}_{stability}_{formula}_{space_group}'
+                            dir_name = os.path.join(zpe_path, name)
+                            if not os.path.isdir(dir_name):
+                                os.mkdir(dir_name)
+                            tmp_structure = IStructure.from_dict(structure['structure'])
+                            analyzer = SpacegroupAnalyzer(tmp_structure, symprec=args.tol)
+                            primitive = analyzer.get_primitive_standard_structure()
+                            poscar = os.path.join(dir_name, 'POSCAR')
+                            primitive.to(filename=poscar, fmt='POSCAR')
+                            with open(poscar, 'r') as f:
+                                lines = f.readlines()
+                            with open(poscar, 'w') as f:
+                                lines[0] = f'EA{structure["id"]} {stability} {formula} {space_group}\n'
+                                f.writelines(lines)
+                            compose_potcar(tmp_structure, specific_path, dir_name)
+                            get_slurm_script(properties, system, dir_name)
+                            write_incar('relaxation', properties, args.press, dir_name)
+        else:
+            if not os.path.isfile(os.path.join(zpe_path, 'structures.json')):
+                _ = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=zpe_path)
+            print(f'Working with ZPE calculations in {zpe_path}')
+            structures = load_ech(zpe_path)
+            zpe_structures = collect_zpe(zpe_path, structures)
+            get_convex_hulls(zpe_structures)
 
 
 if __name__ == '__main__':

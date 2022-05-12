@@ -1,6 +1,7 @@
 import re
 import os
 import json
+import yaml
 import numpy as np
 
 from functools import reduce
@@ -11,6 +12,7 @@ from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.cif import CifWriter
 from pymatgen.core.structure import IStructure
 from pymatgen.analysis.structure_matcher import StructureMatcher
+from scipy.spatial import ConvexHull
 
 
 def parse_formula(structure):
@@ -137,6 +139,7 @@ class Structure(object):
             self.X = (float(split[-2]))
         if dim == 3:
             self.X = (float(split[-3]), float(split[-2]))
+        self.Y = (float(split[-1]))
 
     def stability(self, ths_f):
         if self.fit == 0:
@@ -278,3 +281,213 @@ def parse_ech(dirname, ths, poscars, tol_min, tol_step, tol_max, dump_dir='', re
     else:
         return new_structures
 
+
+def load_ech(zpe_path):
+    with open(os.path.join(zpe_path, 'structures.json'), 'r', encoding='utf-8') as f:
+        structures = json.load(f)
+    return structures
+
+
+def get_structure(structures, id):
+    desired_structure = dict()
+    for comp in structures.keys():
+        for cat in structures[comp].keys():
+            for structure in structures[comp][cat]:
+                if structure['id'] == id:
+                    desired_structure = structure
+                    break
+            if desired_structure:
+                break
+        if desired_structure:
+            break
+    return desired_structure
+
+
+def get_zpe(thermal):
+    with open(thermal, 'r') as f:
+        therm = yaml.safe_load(f)
+    natom = therm['natom']
+    zpe = therm['zero_point_energy'] * 0.01036410
+    return zpe/natom
+
+
+def get_ref_energies(system, zpe_structures):
+    ref_energies = list()
+    for specie in system:
+        energies = list()
+        for structure in zpe_structures:
+            comp_cat = structure['composition category']
+            formula = structure['formula']
+            if comp_cat == 'single':
+                if specie in formula:
+                    energies.append(structure['new energy, eV/atom'])
+        ref_energies.append(min(energies))
+    return ref_energies
+
+
+def get_new_y(structure, ref_energies):
+    comp = structure['composition reduced']
+    e = structure['new energy, eV/atom']
+    natoms = sum(comp)
+    y = natoms * e
+    for i in range(len(comp)):
+        y = y - comp[i] * ref_energies[i]
+    y = y / natoms
+    structure.update({'ZPE convex hull y': y})
+
+
+def collect_zpe(zpe_path, structures):
+    zpe_ids = list()
+    dirs = list()
+    for fname in os.listdir(zpe_path):
+        dir_ = os.path.join(zpe_path, fname)
+        if os.path.isdir(dir_):
+            if fname.startswith('EA'):
+                id = int(fname.split('_')[0].replace('EA', ''))
+                zpe_ids.append(id)
+                dirs.append(dir_)
+    zpe_structures = list()
+    zpe_ids_true = list()
+    zpe_ids_false = list()
+    for i, id in enumerate(zpe_ids):
+        thermal = os.path.join(dirs[i], 'phonopy', 'thermal_properties.yaml')
+        structure = get_structure(structures, id)
+        comp_cat = structure['composition category']
+        symmetry = structure['symmetry']
+        space_group = symmetry[list(symmetry)[-1]][1]
+        formula = structure['formula']
+        if structure['stability category'] == 'stable':
+            stab_cat = 'stable'
+        else:
+            stab_cat = structure['fitness']
+        if os.path.isfile(thermal):
+            zpe = get_zpe(thermal)
+            structure.update({'zpe': zpe, 'new energy, eV/atom': structure['energy, eV/atom'] + zpe})
+            zpe_structures.append(structure)
+            zpe_ids_true.append(f"{space_group}-{formula} (EA{str(id)}, {stab_cat})")
+            # print(f"{comp_cat} {space_group}-{formula} (EA{str(id)}, {stab_cat}) has ZPE = {round(zpe, 4)} eV/atom")
+        else:
+            zpe_ids_false.append(f"{space_group}-{formula} (EA{str(id)}, {stab_cat})")
+    print(f'\nWill work with {len(zpe_ids)} structures: {", ".join(zpe_ids_true)}\n')
+    print(f'Will NOT work with {len(zpe_ids)} structures: {", ".join(zpe_ids_false)}\n')
+    system_cat = 1
+    for structure in zpe_structures:
+        system_cat = len(structure['composition'])
+        break
+    if system_cat == 1:
+        assert False
+    system = list()
+    for structure in zpe_structures:
+        if system_cat == 3:
+            if structure['composition category'] == 'ternary':
+                formula = IStructure.from_dict(structure['structure']).formula
+                split = re.split(r'(\d+)', formula)
+                for specie in split:
+                    specie = specie.replace(' ', '')
+                    if specie.isalpha():
+                        system.append(specie)
+                print(f'The program understands this system as ternary {"-".join(system)}')
+                break
+        if system_cat == 2:
+            if structure['composition category'] == 'binary':
+                formula = IStructure.from_dict(structure['structure']).formula
+                split = re.split(r'(\d+)', formula)
+                for specie in split:
+                    specie = specie.replace(' ', '')
+                    if specie.isalpha():
+                        system.append(specie)
+                print(f'The program understands this system as binary {"-".join(system)}')
+                break
+    ref_energies = get_ref_energies(system, zpe_structures)
+    for structure in zpe_structures:
+        get_new_y(structure, ref_energies)
+    return zpe_structures
+
+
+def get_zpe_ids(zpe_structures):
+    zpe_ids = list()
+    for structure in zpe_structures:
+        zpe_ids.append(structure['id'])
+    return zpe_ids
+
+
+def area(x1, y1, x2, y2, x3, y3):
+    return abs((x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)) / 2.0)
+
+
+def inside(x1, y1, x2, y2, x3, y3, x, y):
+    A = area(x1, y1, x2, y2, x3, y3)
+    A1 = area(x, y, x2, y2, x3, y3)
+    A2 = area(x1, y1, x, y, x3, y3)
+    A3 = area(x1, y1, x2, y2, x, y)
+    if A == A1 + A2 + A3:
+        return True
+    else:
+        return False
+
+
+def get_simplex(point, points):
+    points = np.asarray(points)
+    x, y = point
+    _hull = ConvexHull(points)
+    result = None
+    for triangle in points[_hull.simplices]:
+        if triangle[:,-1].all() <= 0:
+            # print(triangle[:,-1])
+            x1 = triangle[0, 0]
+            x2 = triangle[1, 0]
+            x3 = triangle[2, 0]
+            y1 = triangle[0, 1]
+            y2 = triangle[1, 1]
+            y3 = triangle[2, 1]
+            if inside(x1, y1, x2, y2, x3, y3, x, y):
+                result = triangle
+                break
+    return result
+
+
+def get_convex_hulls(zpe_structures):
+    old_coords = list()
+    for structure in zpe_structures:
+        X = structure['convex hull x']
+        Y = structure['convex hull y']
+        coords = X + [Y]
+        old_coords.append(coords)
+    hull = ConvexHull(old_coords)
+    old_stable = list()
+    for i in hull.vertices:
+        structure = zpe_structures[i]
+        y = structure['convex hull y']
+        if y <= 0:
+            symmetry = structure['symmetry']
+            space_group = symmetry[list(symmetry)[-1]][1]
+            formula = structure['formula']
+            id = structure['id']
+            old_stable.append(f"{space_group}-{formula} (EA{str(id)})")
+    print(f'\nOld stable structures are {", ".join(old_stable)}')
+    new_coords = list()
+    for structure in zpe_structures:
+        X = structure['convex hull x']
+        Y = structure['ZPE convex hull y']
+        coords = X + [Y]
+        new_coords.append(coords)
+    hull = ConvexHull(new_coords)
+    new_stable = list()
+    for i in hull.vertices:
+        structure = zpe_structures[i]
+        y = structure['ZPE convex hull y']
+        if y <= 0:
+            symmetry = structure['symmetry']
+            space_group = symmetry[list(symmetry)[-1]][1]
+            formula = structure['formula']
+            id = structure['id']
+            new_stable.append(f"{space_group}-{formula} (EA{str(id)})")
+    print(f'New stable structures are {", ".join(new_stable)}\n')
+    """
+    for i in range(len(zpe_structures)):
+        if i not in hull.vertices:
+            structure = zpe_structures[i]
+            formula = structure['formula']
+            x = structure['convex hull x']
+            print(formula, get_simplex(x, new_coords))
+    """
