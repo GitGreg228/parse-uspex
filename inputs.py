@@ -51,6 +51,7 @@ def get_slurm_script(properties, system, path):
 #SBATCH -J r{properties['id']}
 #SBATCH -N {system['N']}
 #SBATCH -n {system['n']}
+#SBATCH -t 06:00:00
 
 {system['modules']}
 
