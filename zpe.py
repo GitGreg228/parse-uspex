@@ -38,6 +38,10 @@ def main():
         zpe_path = os.path.join(dir, 'ZPE')
         if not os.path.isdir(zpe_path):
             os.mkdir(zpe_path)
+            launch_all(zpe_path)
+            phonopy(zpe_path)
+            gather(zpe_path)
+            clear(zpe_path)
             structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=zpe_path)
             for comp in structures.keys():
                 # comp_path = os.path.join(zpe_path, comp)

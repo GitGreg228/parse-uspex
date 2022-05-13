@@ -91,6 +91,188 @@ NPAR = 4
 
 
 def launch_all(zpe_path):
-    script = f"""#!/bin/sh
+    script = """#!/bin/sh
 
-""".format()
+for dir_name in `ls -d */`
+do
+    echo $dir_name
+    cd $dir_name
+    sbatch script.sh
+    cd ..
+done
+"""
+
+    with open(os.path.join(zpe_path, 'launch_all.sh'), 'w') as f:
+        f.write(script)
+
+
+def phonopy(zpe_path):
+    script = r"""#!/bin/sh
+
+for dir_name in `ls -d */`
+do
+    echo $dir_name
+    cd $dir_name
+    if [ -d phonopy/ ]; then
+        echo 'phonopy dir is already created'
+    else
+        logend=`tail -n 1 log | awk '{print $1}'`
+        if [ $logend == 'reached' ]; then
+            echo 'relaxation is finished'
+            mkdir phonopy/
+            cd phonopy
+            cat >INCAR<<!
+  PREC = Accurate
+IBRION = -1
+ ENCUT = 500
+ EDIFF = 1.0e-08
+ISMEAR = 1; SIGMA = 0.2
+ IALGO = 38
+ LREAL = .FALSE.
+ LWAVE = .FALSE.
+LCHARG = .FALSE.
+  NPAR = 16
+KSPACING = 0.314
+!
+            cp ../CONTCAR POSCAR
+            phonopy -d --dim 2 2 2 --tolerance=2e-1
+            for fname in `ls POSCAR-*`
+            do
+                disp="${fname/POSCAR/disp}"
+                id="${fname/POSCAR-/}"
+                mkdir $disp
+                mv $fname $disp/POSCAR
+                cd $disp
+                cp ../INCAR .
+                cp ../../POTCAR .
+                cp ../../script.sh .
+                sed -i "s/#SBATCH -J r/#SBATCH -J ${id}p/g" script.sh
+                sed -i "s/#SBATCH -n 8/#SBATCH -n 16/g" script.sh
+                sbatch script.sh
+                cd .. 
+            done
+            cd ..
+        else 
+            echo 'relaxation is not yet finished, skipping this folder'
+        fi
+    fi
+    cd ..
+done
+
+    """
+
+    with open(os.path.join(zpe_path, 'phonopy.sh'), 'w') as f:
+        f.write(script)
+
+
+def gather(zpe_path):
+    script = r"""#!/bin/sh
+
+for dir_name in `ls -d */`
+do
+    cd $dir_name
+    stat=$dir_name": "
+    if [ -d phonopy/ ]; then 
+        cd phonopy/
+        phonstat=""
+        if [ ! -f total_dos.pdf ]; then
+            for disp in `ls -d disp-*/`
+            do
+                cd $disp
+                if [ -f log ]; then
+                    err=`cat err`
+                    log=`tail -n 1 log | awk '{print $2}'`
+                    if [ "$log" == "F=" ]; then
+                        problems=`grep 'very serious problems' log`
+                        if [ "$problems" == "" ]; then
+                            phonstat=$phonstat""
+                            else
+                            phonstat=$phonstat"problems in $disp "
+                            #sed -i "s/NPAR = 4/NPAR = 8/g" INCAR
+                            #sbatch script.sh
+                        fi
+                    else
+                        if [ "$err" != "" ]; then
+                            phonstat=$phonstat" error in $disp"
+                        else
+                            phonstat=$phonstat"$disp still working "
+                        fi
+                    fi
+                else
+                    phonstat=$phonstat"$disp not yet started "
+                fi
+                cd ..
+            done
+        fi
+        cd ..
+    else
+        stat=$stat"no phonopy dir created yet"
+    fi
+    if [ "$phonstat" == "" ]; then
+        phonstat="all done"
+        cd phonopy
+        if [ ! -f FORCE_SETS ]; then
+            disp_s=`ls -d disp-*/ | head -n 1`
+            disp_f=`ls -d disp-*/ | tail -n 1`
+            disp_s="${disp_s/disp-/}"
+            disp_f="${disp_f/disp-/}"
+            disp_s="${disp_s////}"
+            disp_f="${disp_f////}"
+            disp_range=disp-\{${disp_s}..${disp_f}\}
+            cat>phon.sh<<!
+#!/bin/sh
+phonopy -f $disp_range/vasprun.xml
+!
+            chmod 777 phon.sh
+            ./phon.sh
+            if [ ! -f mesh.conf ]; then
+                atom_name=`sed '6q;d' POSCAR`
+                cat>mesh.conf <<!
+ATOM_NAME = $atom_name
+DIM = 2 2 2
+MP = 10 10 10
+!
+            fi
+            if [ ! -f total_dos.pdf ]; then
+                phonopy -s -p mesh.conf --tolerance=2e-1
+            fi
+            if [ ! -f thermal_properties.yaml ]; then
+                phonopy -t -p mesh.conf --tolerance=2e-1 > thermal.log
+            fi
+        fi
+        cd ..
+    fi
+    printf "$stat $phonstat \n"
+    cd ..
+done
+
+"""
+
+    with open(os.path.join(zpe_path, 'gather.sh'), 'w') as f:
+        f.write(script)
+
+
+def clear(zpe_path):
+    script = """#!/bin/sh
+
+for dir_name in `ls -d */`
+do
+    cd $dir_name
+    if [ -d phonopy/ ]; then
+        cd phonopy/
+    if [ -f total_dos.pdf ]; then
+        if [ -f thermal_properties.yaml ]; then
+            echo deleting disps in $dir_name
+            rm -rf disp-*/
+        fi
+        else 
+            echo work is not finished in $dir_name
+        fi
+        cd ..
+    fi
+    cd ..
+done
+    """
+
+    with open(os.path.join(zpe_path, 'clear.sh'), 'w') as f:
+        f.write(script)
