@@ -57,20 +57,20 @@ phonopy -f $disp_range/vasprun.xml
 !
             chmod 777 phon.sh
             ./phon.sh
-            if [ ! -f mesh.conf ]; then
+        fi
+        if [ ! -f mesh.conf ]; then
                 atom_name=`sed '6q;d' POSCAR`
                 cat>mesh.conf <<!
 ATOM_NAME = $atom_name
 DIM = 2 2 2
-MP = 10 10 10
+MP = 31 31 31
 !
-            fi
-            if [ ! -f total_dos.pdf ]; then
+        fi
+        if [ ! -f total_dos.pdf ]; then
                 phonopy -s -p mesh.conf --tolerance=2e-1
-            fi
-            if [ ! -f thermal_properties.yaml ]; then
-                phonopy -t -p mesh.conf --tolerance=2e-1 > thermal.log
-            fi
+        fi
+        if [ ! -f thermal_properties.yaml ]; then
+                phonopy -t -p mesh.conf --tolerance=2e-1 --tmax 2000 > thermal.log
         fi
         cd ..
     fi
