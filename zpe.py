@@ -3,7 +3,7 @@ import os
 import json
 
 from tqdm import tqdm
-from utils import listdirs, analyze_symmetry, split_poscars, parse_ech, load_ech, collect_zpe, get_convex_hulls
+from utils import listdirs, split_poscars, parse_ech, load_ech, collect_zpe, get_convex_hulls, boolean_string
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.core.structure import IStructure
@@ -20,7 +20,8 @@ def main():
     parser.add_argument('--tol_max', type=float, default=0.5, help='Maximum tolerance')
     parser.add_argument('--system', type=int, default=1, help='Slurm config in inputs.py')
     parser.add_argument('--press', type=int, default=2000, help='pressure in kBar for subsequent VASP calculations')
-    parser.add_argument('--temp', nargs='+', default=[0, 300, 500, 1000], help='Temperatures on which Convex Hulls are calculated')
+    parser.add_argument('--temp', type=int, default=0, help='Temperature on which Convex Hull is calculated')
+    parser.add_argument('--plot', type=boolean_string, default=False, help='Make 3d plots (some GUI required)')
     args = parser.parse_args()
     system = get_system(args.system)
 
@@ -82,7 +83,7 @@ def main():
             print(f'Working with ZPE calculations in {zpe_path}')
             structures = load_ech(zpe_path)
             zpe_structures = collect_zpe(zpe_path, structures)
-            zpe_structures = get_convex_hulls(zpe_structures)
+            zpe_structures = get_convex_hulls(zpe_structures, args.temp, args.plot)
             with open(os.path.join(zpe_path, 'zpe_structures.json'), 'w', encoding='utf-8') as f:
                 json.dump(zpe_structures, f, ensure_ascii=False, indent=4)
 

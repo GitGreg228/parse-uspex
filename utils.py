@@ -19,6 +19,12 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
+def boolean_string(s):
+    if s not in {'False', 'True'}:
+        raise ValueError('Not a valid boolean string')
+    return s == 'True'
+
+
 def parse_formula(structure):
     formula = structure.formula
     split = re.split(r'(\d+)', formula)
@@ -653,13 +659,14 @@ class ExtendedConvexHull(object):
                 plt.gca().add_collection3d(srf)
 
 
-def get_convex_hulls(zpe_structures):
-    ech = ExtendedConvexHull(zpe_structures, t=1000)
+def get_convex_hulls(zpe_structures, temp, plot):
+    ech = ExtendedConvexHull(zpe_structures, t=temp)
     ech.get_stable()
     zpe_structures = ech.get_new_y()
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    ech.plot(ax)
-    ax.set_axis_off()
-    plt.show()
+    if plot:
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        ech.plot(ax)
+        ax.set_axis_off()
+        plt.show()
     return zpe_structures
