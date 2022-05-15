@@ -3,6 +3,7 @@ import os
 import json
 import yaml
 import numpy as np
+import pandas as pd
 
 from functools import reduce
 from tqdm import tqdm
@@ -148,7 +149,7 @@ class Structure(object):
         self.Y = (float(split[-1]))
 
     def stability(self, ths_f):
-        if self.fit == 0:
+        if self.fit <= 0:
             self.stab_cat = 'stable'
         else:
             for th in ths_f:
@@ -166,8 +167,8 @@ class Structure(object):
         os.remove('tmp_POSCAR')
         return self.structure
 
-    def symm(self, tol_min, tol_step, tol_max):
-        self.symm = analyze_symmetry(self.structure, tol_min, tol_step, tol_max)
+    def symm(self, tol_min=0.01, tol_step=0.01, tol_max=0.5, save_dir=''):
+        self.symm = analyze_symmetry(self.structure, tol_min, tol_step, tol_max, save_dir=save_dir)
         return self.symm
 
     def subcat(self):
@@ -226,15 +227,17 @@ def reduce_structures(structures):
         for cat in structures[comp].keys():
             if cat != 'stable':
                 for structure in structures[comp][cat]:
-                    for stable_structure in structures[comp]['stable']:
-                        if structure['formula'] == stable_structure['formula'] or comp == 'single':
-                            formula = structure['formula']
-                            fitness = structure['fitness']
-                            s1 = IStructure.from_dict(structure['structure'])
-                            s2 = IStructure.from_dict(stable_structure['structure'])
-                            if matcher.fit(s1, s2):
-                                print(f'{comp} {formula} with fitness {fitness} is the same as stable one')
-                                structures[comp][cat].remove(structure)
+                    if 'stable' in structures[comp].keys():
+                        for stable_structure in structures[comp]['stable']:
+                            if structure['formula'] == stable_structure['formula'] or comp == 'single':
+                                formula = structure['formula']
+                                fitness = structure['fitness']
+                                s1 = IStructure.from_dict(structure['structure'])
+                                s2 = IStructure.from_dict(stable_structure['structure'])
+                                if matcher.fit(s1, s2):
+                                    print(f'{comp} {formula} with fitness {fitness} is the same as stable one')
+                                    if structure in structures[comp][cat]:
+                                        structures[comp][cat].remove(structure)
                 for i, structure in enumerate(structures[comp][cat]):
                     for j, other_structure in enumerate(structures[comp][cat]):
                         if i < j:
@@ -286,6 +289,27 @@ def parse_ech(dirname, ths, poscars, tol_min, tol_step, tol_max, dump_dir='', re
         return reduce_structures(new_structures)
     else:
         return new_structures
+
+
+class VaspDir(object):
+    id = int()
+    # struc = Structure
+
+    def __init__(self, dir_path, zpe_path):
+        self.id = int(os.path.basename(dir_path).split('_')[0].replace('EA', ''))
+        with open(os.path.join(zpe_path, '..', 'extended_convex_hull')) as f:
+            lines = f.readlines()
+        for line in lines:
+            try:
+                if self.id == int(line.split()[0]):
+                    structure = Structure(line)
+                    break
+            except ValueError:
+                pass
+        poscars = {str(self.id): Poscar(IStructure.from_file(os.path.join(dir_path, 'CONTCAR'))).__str__()}
+        structure.struc(poscars)
+        structure.symm(save_dir=dir_path)
+        self.structure = structure.as_dict()
 
 
 def load_ech(zpe_path):
@@ -357,9 +381,11 @@ def get_system(zpe_structures, q=True):
 
 
 def get_ref_energies(system, zpe_structures):
+    old_ref_energies = list()
     ref_energies = list()
     ref_gibbs = list()
     for specie in system:
+        old_energies = list()
         energies = list()
         gibbs = list()
         for structure in zpe_structures:
@@ -367,56 +393,63 @@ def get_ref_energies(system, zpe_structures):
             formula = structure['formula']
             if comp_cat == 'single':
                 if specie in formula:
+                    old_energies.append(structure['energy, eV/atom'])
                     energies.append(structure['new energy, eV/atom'])
                     gibbs.append(structure['G(T)'])
+        old_ref_energies.append((min(old_energies)))
         ref_energies.append(min(energies))
         ref_gibbs.append(gibbs[energies.index(min(energies))])  # need some fixes
-    return ref_energies, ref_gibbs
+    return old_ref_energies, ref_energies, ref_gibbs
 
 
-def get_new_y(structure, ref_energies, ref_gibbs):
+def get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs):
     comp = structure['composition reduced']
     e = structure['new energy, eV/atom']
+    e_old = structure['energy, eV/atom']
     natoms = sum(comp)
     y = natoms * e
+    y_old = natoms * e_old
     for i in range(len(comp)):
         y = y - comp[i] * ref_energies[i]
+        y_old = y_old - comp[i] * old_ref_energies[i]
     y = y / natoms
-    structure.update({'ZPE convex hull y': y})
+    y_old = y_old / natoms
+    structure.update({'convex hull y': round(y_old, 4)})
+    structure.update({'ZPE convex hull y': round(y, 4)})
     for T in structure['G(T)'].keys():
         e = structure['G(T)'][T]
         y = natoms * e
         for i in range(len(comp)):
             y = y - comp[i] * ref_gibbs[i][T]
         y = y / natoms
-        structure.update({f'T = {T} K convex hull y': y})
+        structure.update({f'T = {T} K convex hull y': round(y, 4)})
         # print(structure['formula'], y)
 
 
-def collect_zpe(zpe_path, structures):
+def collect_zpe(zpe_path):
+    structures = list()
     zpe_ids = list()
     dirs = list()
+    zpe_structures = list()
     for fname in os.listdir(zpe_path):
         dir_ = os.path.join(zpe_path, fname)
         if os.path.isdir(dir_):
             if fname.startswith('EA'):
-                id = int(fname.split('_')[0].replace('EA', ''))
-                zpe_ids.append(id)
                 dirs.append(dir_)
-    zpe_structures = list()
+    print('Processing VASP and phonopy calculations')
+    for i in tqdm(range(len(dirs))):
+        vaspdir = VaspDir(dirs[i], zpe_path)
+        structures.append(vaspdir.structure)
+        zpe_ids.append(vaspdir.id)
     zpe_ids_true = list()
     zpe_ids_false = list()
     for i, id in enumerate(zpe_ids):
         thermal = os.path.join(dirs[i], 'phonopy', 'thermal_properties.yaml')
-        structure = get_structure(structures, id)
+        structure = structures[i]
         comp_cat = structure['composition category']
         symmetry = structure['symmetry']
         space_group = symmetry[list(symmetry)[-1]][1]
         formula = structure['formula']
-        if structure['stability category'] == 'stable':
-            stab_cat = 'stable'
-        else:
-            stab_cat = structure['fitness']
         if os.path.isfile(thermal):
             energy = float(Oszicar(os.path.join(dirs[i], 'OSZICAR')).final_energy)
             natoms = IStructure.from_file(os.path.join(dirs[i], 'POSCAR')).num_sites
@@ -424,17 +457,16 @@ def collect_zpe(zpe_path, structures):
             gibbs = {t: energy/natoms + thermal_dict[t] for t in thermal_dict.keys()}
             structure.update({'energy, eV/atom': energy/natoms, 'ZPE, eV/atom': zpe,
                               'new energy, eV/atom': energy/natoms + zpe, 'F(T)': thermal_dict, 'G(T)': gibbs})
+            zpe_ids_true.append(f"{space_group}-{formula} (EA{str(id)})")
             zpe_structures.append(structure)
-            zpe_ids_true.append(f"{space_group}-{formula} (EA{str(id)}, {stab_cat})")
-            # print(f"{comp_cat} {space_group}-{formula} (EA{str(id)}, {stab_cat}) has ZPE = {round(zpe, 4)} eV/atom")
         else:
-            zpe_ids_false.append(f"{space_group}-{formula} (EA{str(id)}, {stab_cat})")
+            zpe_ids_false.append(f"{space_group}-{formula} (EA{str(id)})")
     print(f'\nWill work with {len(zpe_ids)} structures: {", ".join(zpe_ids_true)}\n')
-    print(f'Will NOT work with {len(zpe_ids)} structures: {", ".join(zpe_ids_false)}\n')
+    print(f'Will NOT work with {len(zpe_ids_false)} structures: {", ".join(zpe_ids_false)}\n')
     system = get_system(zpe_structures)
-    ref_energies, ref_gibbs = get_ref_energies(system, zpe_structures)
+    old_ref_energies, ref_energies, ref_gibbs = get_ref_energies(system, zpe_structures)
     for structure in zpe_structures:
-        get_new_y(structure, ref_energies, ref_gibbs)
+        get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs)
     return zpe_structures
 
 
@@ -466,7 +498,7 @@ def get_simplex(point, points):
     _hull = ConvexHull(points)
     result = None
     for triangle in points[_hull.simplices]:
-        if np.all(triangle[:,-1] <= 0.0):
+        if np.all(triangle[:, -1] <= 0.0) and np.any(np.round(triangle[:, -1], 3) < 0.0):
             x1 = triangle[0, 0]
             x2 = triangle[1, 0]
             x3 = triangle[2, 0]
@@ -479,17 +511,17 @@ def get_simplex(point, points):
     return result
 
 
-def LinePlaneCollision(planeNormal, planePoint, rayDirection, rayPoint, epsilon=1e-6):
+def LinePlaneCollision(planeNormal, planePoint, rayDirection, rayPoint, structure, epsilon=1e-6):
     ndotu = planeNormal.dot(rayDirection)
     if abs(ndotu) < epsilon:
-        raise RuntimeError("no intersection or line is within plane")
+        raise RuntimeError(f"{structure['formula']} - no intersection or line is within plane")
     w = rayPoint - planePoint
     si = -planeNormal.dot(w) / ndotu
     Psi = w + si * rayDirection + planePoint
     return Psi
 
 
-def distance_to_simplex(point, triangle):
+def distance_to_simplex(point, triangle, structure):
     p0, p1, p2 = triangle
     x0, y0, z0 = p0
     x1, y1, z1 = p1
@@ -501,7 +533,7 @@ def distance_to_simplex(point, triangle):
     planePoint = np.array([x0, y0, z0])  # Any point on the plane
     rayDirection = np.array([0, 0, 1])
     rayPoint = np.array([point[0], point[1], 0])  # Any point along the ray
-    Psi = LinePlaneCollision(planeNormal, planePoint, rayDirection, rayPoint)
+    Psi = LinePlaneCollision(planeNormal, planePoint, rayDirection, rayPoint, structure)
     return Psi
 
 
@@ -518,13 +550,13 @@ class ExtendedConvexHull(object):
 
     def __init__(self, zpe_structures, t=0):
         self.system = get_system(zpe_structures, q=False)
-        self.t = t
+        self.t = int(t)
         self.zpe_structures = zpe_structures
         old_coords = list()
         for structure in zpe_structures:
             X = structure['convex hull x']
             Y = structure['convex hull y']
-            coords = X + [Y]
+            coords = list(X) + [Y]
             old_coords.append(coords)
         self.old_coords = np.asarray(old_coords)
         new_coords = list()
@@ -534,11 +566,13 @@ class ExtendedConvexHull(object):
                 Y = structure['ZPE convex hull y']
             else:
                 Y = structure[f'T = {str(int(t))} K convex hull y']
-            coords = X + [Y]
+            coords = list(X) + [Y]
             new_coords.append(coords)
         self.new_coords = np.asarray(new_coords)
 
     def get_stable(self):
+        self.old_stable = list()
+        self.new_stable = list()
         hull = ConvexHull(self.old_coords)
         self.old_hull = hull
         for i in hull.vertices:
@@ -570,16 +604,18 @@ class ExtendedConvexHull(object):
         else:
             print(f'New stable structures are {", ".join(self.new_stable)}\n')
 
-    def get_new_y(self):
+    def get_new_fitness(self):
         for structure in self.zpe_structures:
             x = structure['convex hull x']
+            y = structure['convex hull y']
             if self.t == 0:
                 y = structure['ZPE convex hull y']
             else:
                 y = structure[f'T = {str(int(self.t))} K convex hull y']
             triangle = get_simplex(x, self.new_coords)
-            dist = distance_to_simplex(x, triangle)
+            dist = distance_to_simplex(x, triangle, structure)
             new_fitness = y - dist[-1]
+            # print(structure['formula'], triangle)
             if new_fitness > 0:
                 if round(new_fitness, 4) > 0:
                     new_fitness = round(new_fitness, 4)
@@ -593,62 +629,79 @@ class ExtendedConvexHull(object):
         return self.zpe_structures
 
     def plot(self, ax):
+        """
         points = self.old_coords
         x_old = points[:, 0]
         y_old = points[:, 1]
         z_old = points[:, 2]
         ax.scatter(x_old, y_old, z_old, c=z_old, marker='^')
-        points = self.new_coords
-        x_new = points[:, 0]
-        y_new = points[:, 1]
-        z_new = points[:, 2]
-        ax.scatter(x_new, y_new, z_new, c=z_new)
+        """
+        x_stable, x_unstable = list(), list()
+        y_stable, y_unstable = list(), list()
+        z_stable, z_unstable = list(), list()
+        for i, point in enumerate(self.new_coords):
+            x_new, y_new, z_new = point
+            structure = self.zpe_structures[i]
+            if i in self.new_hull.vertices:
+                x_stable.append(x_new)
+                y_stable.append(y_new)
+                z_stable.append(z_new)
+            else:
+                x_unstable.append(x_new)
+                y_unstable.append(y_new)
+                z_unstable.append(z_new)
+        ax.scatter(x_stable, y_stable, z_stable, c=z_stable)
+        ax.scatter(x_unstable, y_unstable, z_unstable, c='gray', s=0.7)
         xlim = [0.5, 0.5]
         ylim = [0, 0]
-        zlim = [0, 0]
-        single_ids = list()
+        zlim = [0, 0.1]
+        single_points = list()
         for i, name in enumerate(self.zpe_structures):
             structure = self.zpe_structures[i]
             if structure['composition category'] == 'single':
-                if self.t == 0:
-                    if structure['ZPE convex hull y'] <= 0:
-                        single_ids.append(i)
-                else:
-                    if structure[f'T = {str(int(self.t))} K convex hull y'] <= 0:
-                        single_ids.append(i)
+                if i in self.new_hull.vertices and self.new_coords[i][-1] == 0:
+                    single_points.append(self.new_coords[i])
             else:
-                if x_new[i] < xlim[0]:
-                    xlim[0] = x_new[i]
-                if x_new[i] > xlim[1]:
-                    xlim[1] = x_new[i]
-                if y_new[i] < ylim[0]:
-                    ylim[0] = y_new[i]
-                if y_new[i] > ylim[1]:
-                    ylim[1] = y_new[i]
-                if z_new[i] < zlim[0]:
-                    zlim[0] = z_new[i]
-                if z_new[i] > zlim[1]:
-                    zlim[1] = z_new[i]
+                x_new, y_new, z_new = self.new_coords[i]
+                if x_new < xlim[0]:
+                    xlim[0] = x_new
+                if x_new > xlim[1]:
+                    xlim[1] = x_new
+                if y_new < ylim[0]:
+                    ylim[0] = y_new
+                if y_new > ylim[1]:
+                    ylim[1] = y_new
+                if z_new < zlim[0]:
+                    zlim[0] = z_new
+                if z_new > zlim[1]:
+                    zlim[1] = z_new
         for i, name in enumerate(self.zpe_structures):
+            x_new, y_new, z_new = self.new_coords[i]
             structure = self.zpe_structures[i]
             formula = formula_from_comp(structure['composition reduced'], self.system)
+            # formula = structure['formula']
             if i in self.new_hull.vertices:
-                ax.text(x_new[i], y_new[i], z_new[i], f"{formula}", fontsize=10, color='k')
+                ha = 'left'
+                va = 'bottom'
+                ax.text(x_new, y_new, z_new, f"{formula}", fontsize=10, color='k', ha=ha, va=va)
             else:
                 if self.t == 0:
-                    ax.text(x_new[i], y_new[i], z_new[i],
+                    ax.text(x_new, y_new, z_new,
                             f"{formula} ({structure['ZPE fitness']})", fontsize=7, color='gray')
                 else:
-                    ax.text(x_new[i], y_new[i], z_new[i],
+                    pass
+                    ax.text(x_new, y_new, z_new,
                             f"{formula} ({structure[f'T = {str(int(self.t))} K fitness']})", fontsize=7,
                             color='gray')
-        main_x = list(x_new[single_ids]) + [list(x_new[single_ids])[0]]
-        main_y = list(y_new[single_ids]) + [list(y_new[single_ids])[0]]
-        main_z = list(z_new[single_ids]) + [list(z_new[single_ids])[0]]
+        single_points = np.asarray(single_points)
+        main_x = np.append(single_points[:, 0], single_points[0, 0])
+        main_y = np.append(single_points[:, 1], single_points[0, 1])
+        main_z = np.append(single_points[:, 2], single_points[0, 2])
         ax.plot(main_x, main_y, main_z, 'k')
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_zlim(zlim)
+        points = self.new_coords
         for triangle in points[self.new_hull.simplices]:
             if np.all(triangle[:, -1] <= 0):
                 x1 = triangle[:, 0]
@@ -660,13 +713,49 @@ class ExtendedConvexHull(object):
 
 
 def get_convex_hulls(zpe_structures, temp, plot):
-    ech = ExtendedConvexHull(zpe_structures, t=temp)
-    ech.get_stable()
-    zpe_structures = ech.get_new_y()
-    if plot:
-        fig = plt.figure(figsize=(10, 10))
-        ax = fig.add_subplot(111, projection='3d')
-        ech.plot(ax)
-        ax.set_axis_off()
-        plt.show()
+    if '0' not in temp:
+        temp = ['0'] + temp
+    for _t in temp:
+        ech = ExtendedConvexHull(zpe_structures, t=_t)
+        ech.get_stable()
+        zpe_structures = ech.get_new_fitness()
+        if plot:
+            fig = plt.figure(figsize=(16, 9))
+            ax = fig.add_subplot(111, projection='3d')
+            ech.plot(ax)
+            ax.set_axis_off()
+            plt.tight_layout()
+            plt.show()
     return zpe_structures
+
+
+def save_zpe(zpe_structures, zpe_path, temp):
+    save_dict = dict()
+    save_dict.update(
+        {'EA': [structure['id'] for structure in zpe_structures]})
+    save_dict.update({'Space Group': [structure['symmetry'][list(structure['symmetry'])[-1]][-1] for structure in zpe_structures]})
+    save_dict.update({'Formula': [structure['formula'] for structure in zpe_structures]})
+    save_dict.update({'X1': [structure['convex hull x'][0] for structure in zpe_structures]})
+    save_dict.update({'X2': [structure['convex hull x'][1] for structure in zpe_structures]})
+    save_dict.update({'E': [round(structure['energy, eV/atom'], 4) for structure in zpe_structures]})
+    save_dict.update({'ZPE': [round(structure['ZPE, eV/atom'], 4) for structure in zpe_structures]})
+    save_dict.update({'E+ZPE': [round(structure['new energy, eV/atom'], 4) for structure in zpe_structures]})
+    for _t in temp:
+        if int(_t) > 0:
+            save_dict.update({f'F at T = {str(_t)}': [round(structure['F(T)'][str(_t)], 4) for structure in zpe_structures]})
+            save_dict.update({f'E+F at T = {str(_t)}': [round(structure['G(T)'][str(_t)], 4) for structure in zpe_structures]})
+    save_dict.update({'Y': [round(structure['convex hull y'], 4) for structure in zpe_structures]})
+    save_dict.update({'ZPE Y': [round(structure['ZPE convex hull y'], 4) for structure in zpe_structures]})
+    for _t in temp:
+        if int(_t) > 0:
+            save_dict.update({f'Y at T = {str(_t)}': [round(structure[f'T = {str(_t)} K convex hull y'], 4) for
+                                                      structure in zpe_structures]})
+    save_dict.update({'Old fitness': [structure['fitness'] for structure in zpe_structures]})
+    save_dict.update({'ZPE fitness': [round(float(structure['ZPE fitness']), 10) for structure in zpe_structures]})
+    for _t in temp:
+        if int(_t) > 0:
+            save_dict.update({f'Fitness at T = {str(_t)}': [round(float(structure[f'T = {str(_t)} K fitness']), 10) for structure in zpe_structures]})
+    name = os.path.join(zpe_path, f'convex_hull.csv')
+    df = pd.DataFrame.from_dict(save_dict)
+    df.to_csv(name, index=False, header=True, sep='\t', float_format='%.4f')
+    print(df)
