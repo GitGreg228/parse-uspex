@@ -95,7 +95,7 @@ def listdirs(rootdir):
     return files
 
 
-def get_comp(lst):
+def get_comp_cat(lst):
     k = 0
     l = len(lst)
     categories = ['single', 'binary', 'ternary', 'quaternary', 'complex']
@@ -140,7 +140,7 @@ class Structure(object):
         self.v = float(split[split.index(']')+2])
         self.fit = float(split[split.index(']')+3])
         self.coords = [float(c) for c in split[split.index(']')+5:]]
-        self.comp_cat = get_comp(self.comp)
+        self.comp_cat = get_comp_cat(self.comp)
         dim = split.index(']') - split.index('[') - 1
         if dim == 2:
             self.X = (float(split[-2]))
@@ -222,36 +222,83 @@ def split_poscars(dirname):
 
 
 def reduce_structures(structures):
+    """
+    Reduces structures using pymatgen matcher to find same ones
+    :param structures:
+    :return:
+    """
     matcher = StructureMatcher()
+    new_structures = dict()
+    for comp in structures.keys():
+        new_structures[comp] = dict()
+        for cat in structures[comp].keys():
+            new_structures[comp][cat] = list()
+    comp_dict = dict()
+    for comp in structures.keys():
+        for cat in structures[comp].keys():
+            for structure in structures[comp][cat]:
+                comp_r = '-'.join([str(c) for c in structure['composition reduced']])
+                if comp_r not in comp_dict.keys():
+                    comp_dict[comp_r] = list()
+                comp_dict[comp_r].append(structure)
+    for comp_r in comp_dict.keys():
+        structure_list = comp_dict[comp_r]
+        fit_list = [structure['fitness'] for structure in structure_list]
+        fittest_idx = fit_list.index(min(fit_list))
+        duplicates = list()
+        for i, structure in enumerate(structure_list):
+            for j, other_structure in enumerate(structure_list):
+                f1 = structure['fitness']
+                f2 = other_structure['fitness']
+                if f2 > f1:
+                    formula = structure['formula']
+                    s1 = IStructure.from_dict(structure['structure'])
+                    s2 = IStructure.from_dict(other_structure['structure'])
+                    if matcher.fit(s1, s2):
+                        print(f'{formula} with fitness {f2} is the same as another one at {f1}')
+                        if i not in duplicates:
+                            duplicates.append(i)
+                        if j not in duplicates:
+                            duplicates.append(j)
+        new_structure_list = [structure_list[fittest_idx]]
+        for i, structure in enumerate(structure_list):
+            if i not in duplicates:
+                new_structure_list.append(structure)
+        comp_dict[comp_r] = new_structure_list
+    for comp_r in comp_dict.keys():
+        for structure in comp_dict[comp_r]:
+            comp = structure['composition category']
+            cat = structure['stability category']
+            new_structures[comp][cat].append(structure)
+    return new_structures
+
+
+def super_reduce_structures(structures):
+    """
+    Reduces structures only by composition
+    :param structures:
+    :return:
+    """
+    comp_list = list()
+    new_structures = dict()
+    for comp in structures.keys():
+        new_structures[comp] = dict()
+        for cat in structures[comp].keys():
+            new_structures[comp][cat] = list()
+    for comp in structures.keys():
+        for structure in structures[comp]['stable']:
+            comp_r = '-'.join([str(c) for c in structure['composition reduced']])
+            comp_list.append(comp_r)
+            new_structures[comp]['stable'].append(structure)
     for comp in structures.keys():
         for cat in structures[comp].keys():
             if cat != 'stable':
                 for structure in structures[comp][cat]:
-                    if 'stable' in structures[comp].keys():
-                        for stable_structure in structures[comp]['stable']:
-                            if structure['formula'] == stable_structure['formula'] or comp == 'single':
-                                formula = structure['formula']
-                                fitness = structure['fitness']
-                                s1 = IStructure.from_dict(structure['structure'])
-                                s2 = IStructure.from_dict(stable_structure['structure'])
-                                if matcher.fit(s1, s2):
-                                    print(f'{comp} {formula} with fitness {fitness} is the same as stable one')
-                                    if structure in structures[comp][cat]:
-                                        structures[comp][cat].remove(structure)
-                for i, structure in enumerate(structures[comp][cat]):
-                    for j, other_structure in enumerate(structures[comp][cat]):
-                        if i < j:
-                            if structure['formula'] == other_structure['formula'] or comp == 'single':
-                                f1 = structure['fitness']
-                                f2 = other_structure['fitness']
-                                if f2 > f1:
-                                    formula = structure['formula']
-                                    s1 = IStructure.from_dict(structure['structure'])
-                                    s2 = IStructure.from_dict(other_structure['structure'])
-                                    if matcher.fit(s1, s2):
-                                        print(f'{comp} {formula} with fitness {f2} is the same as another one at {f1}')
-                                        structures[comp][cat].remove(other_structure)
-    return structures
+                    comp_r = '-'.join([str(c) for c in structure['composition reduced']])
+                    if not comp_r in comp_list:
+                        comp_list.append(comp_r)
+                        new_structures[comp][cat].append(structure)
+    return new_structures
 
 
 def parse_ech(dirname, ths, poscars, tol_min, tol_step, tol_max, dump_dir='', reduce=True):
@@ -291,6 +338,25 @@ def parse_ech(dirname, ths, poscars, tol_min, tol_step, tol_max, dump_dir='', re
         return new_structures
 
 
+def get_comp(structure, system):
+    comp = list()
+    for element in system:
+        comp.append([specie.symbol for specie in structure.species].count(element))
+    GCD = reduce(gcd, comp)
+    comp_r = [c//GCD for c in comp]
+    return comp, comp_r
+
+
+def get_x(comp):
+    frac_0 = comp[0] / sum(comp)
+    frac_1 = comp[1] / sum(comp)
+    frac_2 = comp[2] / sum(comp)
+    vec_0 = np.asarray([np.sqrt(3), 0]) * frac_0
+    vec_1 = np.asarray([- np.sqrt(3) / 2, 1.5]) * frac_1
+    vec_2 = np.asarray([- np.sqrt(3) / 2, 1.5]) * frac_2
+    return vec_0
+
+
 class VaspDir(object):
     id = int()
     # struc = Structure
@@ -307,6 +373,7 @@ class VaspDir(object):
             except ValueError:
                 pass
         poscars = {str(self.id): Poscar(IStructure.from_file(os.path.join(dir_path, 'CONTCAR'))).__str__()}
+        # print(structure.comp_r, get_x(structure.comp_r), structure.X)
         structure.struc(poscars)
         structure.symm(save_dir=dir_path)
         self.structure = structure.as_dict()
@@ -346,37 +413,15 @@ def get_zpe(thermal):
     return zpe/natom, thermal_dict
 
 
-def get_system(zpe_structures, q=True):
-    system_cat = 1
-    for structure in zpe_structures:
-        system_cat = len(structure['composition'])
-        break
-    if system_cat == 1:
-        assert False
+def get_system(structures):
     system = list()
-    for structure in zpe_structures:
-        if system_cat == 3:
-            if structure['composition category'] == 'ternary':
-                formula = IStructure.from_dict(structure['structure']).formula
-                split = re.split(r'(\d+)', formula)
-                for specie in split:
-                    specie = specie.replace(' ', '')
-                    if specie.isalpha():
-                        system.append(specie)
-                if q:
-                    print(f'The program understands this system as ternary {"-".join(system)}')
-                break
-        if system_cat == 2:
-            if structure['composition category'] == 'binary':
-                formula = IStructure.from_dict(structure['structure']).formula
-                split = re.split(r'(\d+)', formula)
-                for specie in split:
-                    specie = specie.replace(' ', '')
-                    if specie.isalpha():
-                        system.append(specie)
-                if q:
-                    print(f'The program understands this system as binary {"-".join(system)}')
-                break
+    for structure in structures:
+        species = set()
+        species = [specie.symbol for specie in structure.species if not (specie in species or species.add(specie))]
+        if len(species) > len(system):
+            system = species
+    comp_cat = get_comp_cat(system)
+    print(f'The program understands this system as {comp_cat} {"-".join(system)}')
     return system
 
 
@@ -428,6 +473,7 @@ def get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs):
 
 def collect_zpe(zpe_path):
     structures = list()
+    structures_ = list()
     zpe_ids = list()
     dirs = list()
     zpe_structures = list()
@@ -436,6 +482,10 @@ def collect_zpe(zpe_path):
         if os.path.isdir(dir_):
             if fname.startswith('EA'):
                 dirs.append(dir_)
+                structures_.append(IStructure.from_file(os.path.join(dir_, 'CONTCAR')))
+    system = get_system(structures_)
+    for structure in structures_:
+        print(get_comp(structure, system))
     print('Processing VASP and phonopy calculations')
     for i in tqdm(range(len(dirs))):
         vaspdir = VaspDir(dirs[i], zpe_path)
@@ -463,11 +513,10 @@ def collect_zpe(zpe_path):
             zpe_ids_false.append(f"{space_group}-{formula} (EA{str(id)})")
     print(f'\nWill work with {len(zpe_ids)} structures: {", ".join(zpe_ids_true)}\n')
     print(f'Will NOT work with {len(zpe_ids_false)} structures: {", ".join(zpe_ids_false)}\n')
-    system = get_system(zpe_structures)
     old_ref_energies, ref_energies, ref_gibbs = get_ref_energies(system, zpe_structures)
     for structure in zpe_structures:
         get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs)
-    return zpe_structures
+    return zpe_structures, system
 
 
 def get_zpe_ids(zpe_structures):
@@ -539,7 +588,7 @@ def distance_to_simplex(point, triangle, structure):
 
 class ExtendedConvexHull(object):
     t = float()
-    system = list()
+    # system = list()
     zpe_structures = list()
     old_coords = list()
     new_coords = list()
@@ -548,8 +597,8 @@ class ExtendedConvexHull(object):
     old_hull = ConvexHull
     new_hull = ConvexHull
 
-    def __init__(self, zpe_structures, t=0):
-        self.system = get_system(zpe_structures, q=False)
+    def __init__(self, zpe_structures, system, t=0):
+        self.system = system # get_system(zpe_structures)
         self.t = int(t)
         self.zpe_structures = zpe_structures
         old_coords = list()
@@ -712,11 +761,11 @@ class ExtendedConvexHull(object):
                 plt.gca().add_collection3d(srf)
 
 
-def get_convex_hulls(zpe_structures, temp, plot):
+def get_convex_hulls(zpe_structures, system, temp, plot):
     if '0' not in temp:
         temp = ['0'] + temp
     for _t in temp:
-        ech = ExtendedConvexHull(zpe_structures, t=_t)
+        ech = ExtendedConvexHull(zpe_structures, system, t=_t)
         ech.get_stable()
         zpe_structures = ech.get_new_fitness()
         if plot:
@@ -759,3 +808,7 @@ def save_zpe(zpe_structures, zpe_path, temp):
     df = pd.DataFrame.from_dict(save_dict)
     df.to_csv(name, index=False, header=True, sep='\t', float_format='%.4f')
     print(df)
+
+
+def plot_ch(df, fit_label, ):
+    pass

@@ -3,7 +3,8 @@ import os
 import json
 
 from tqdm import tqdm
-from utils import listdirs, split_poscars, parse_ech, load_ech, collect_zpe, get_convex_hulls, boolean_string, save_zpe
+from utils import listdirs, split_poscars, parse_ech, load_ech, collect_zpe, \
+    get_convex_hulls, boolean_string, save_zpe, reduce_structures, super_reduce_structures
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.core.structure import IStructure
@@ -22,6 +23,7 @@ def main():
     parser.add_argument('--press', type=int, default=2000, help='pressure in kBar for subsequent VASP calculations')
     parser.add_argument('--temp', nargs='+', default=[0, 500, 1000, 1500, 2000], help='Temperature on which Convex Hull is calculated')
     parser.add_argument('--plot', type=boolean_string, default=False, help='Make 3d plots (some GUI required)')
+    parser.add_argument('--red', type=str, choices=['none', 'reduce', 'super'], default='reduce', help='How to reduce structures')
     args = parser.parse_args()
     system = get_system(args.system)
 
@@ -42,7 +44,11 @@ def main():
             phonopy(zpe_path)
             gather(zpe_path)
             clear(zpe_path)
-            structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=zpe_path)
+            structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=zpe_path, reduce=False)
+            if args.red == 'reduce':
+                structures = reduce_structures(structures)
+            if args.red == 'super':
+                structures = super_reduce_structures(structures)
             for comp in structures.keys():
                 # comp_path = os.path.join(zpe_path, comp)
                 # if not os.path.isdir(comp_path):
@@ -83,8 +89,8 @@ def main():
                             write_incar('relaxation', properties, args.press, dir_name)
         else:
             print(f'Working with ZPE calculations in {zpe_path}')
-            zpe_structures = collect_zpe(zpe_path)
-            zpe_structures = get_convex_hulls(zpe_structures, args.temp, args.plot)
+            zpe_structures, system = collect_zpe(zpe_path)
+            zpe_structures = get_convex_hulls(zpe_structures, system, args.temp, args.plot)
             with open(os.path.join(zpe_path, 'zpe_structures.json'), 'w', encoding='utf-8') as f:
                 json.dump(zpe_structures, f, ensure_ascii=False, indent=4)
             save_zpe(zpe_structures, zpe_path, args.temp)

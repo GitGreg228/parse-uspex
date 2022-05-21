@@ -2,7 +2,7 @@ import argparse
 import os
 
 from tqdm import tqdm
-from utils import listdirs, analyze_symmetry, split_poscars, parse_ech, reduce_structures
+from utils import listdirs, analyze_symmetry, split_poscars, parse_ech, reduce_structures, super_reduce_structures
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.structure import IStructure
 
@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--tol_min', type=float, default=0.01, help='Minimum tolerance')
     parser.add_argument('--tol_step', type=float, default=0.01, help='Tolerance step')
     parser.add_argument('--tol_max', type=float, default=0.5, help='Maximum tolerance')
+    parser.add_argument('--red', type=str, choices=['none', 'reduce', 'super'], default='reduce', help='How to reduce structures')
     args = parser.parse_args()
 
     full_dirs = list()
@@ -29,8 +30,11 @@ def main():
         poscars_path = os.path.join(dir, 'POSCARS')
         if not os.path.isdir(poscars_path):
             os.mkdir(poscars_path)
-        structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=poscars_path)
-        structures = reduce_structures(structures)
+        structures = parse_ech(dir, args.ths, poscars, args.tol_min, args.tol_step, args.tol_max, dump_dir=poscars_path, reduce=False)
+        if args.red == 'reduce':
+            structures = reduce_structures(structures)
+        if args.red == 'super':
+            structures = super_reduce_structures(structures)
         for comp, value in structures.items():
             comp_path = os.path.join(poscars_path, comp)
             if not os.path.isdir(comp_path):
