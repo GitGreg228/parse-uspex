@@ -14,7 +14,7 @@ from inputs import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', type=str, default='.', help='Path to investigate')
-    parser.add_argument('--ths', nargs='+', default=['0.01'], help='Thresholds on metastable structures')
+    parser.add_argument('--ths', nargs='+', default=['0.02'], help='Thresholds on metastable structures')
     parser.add_argument('--tol', type=float, default=0.2, help='Tolerance')
     parser.add_argument('--tol_min', type=float, default=0.01, help='Minimum tolerance')
     parser.add_argument('--tol_step', type=float, default=0.01, help='Tolerance step')
@@ -93,7 +93,9 @@ def main():
             zpe_structures = get_convex_hulls(zpe_structures, system, args.temp, args.plot)
             with open(os.path.join(zpe_path, 'zpe_structures.json'), 'w', encoding='utf-8') as f:
                 json.dump(zpe_structures, f, ensure_ascii=False, indent=4)
-            save_zpe(zpe_structures, zpe_path, args.temp)
+            save_dict = save_zpe(zpe_structures, zpe_path, args.temp, system)
+            with open(os.path.join(zpe_path, 'save_dict.json'), 'w', encoding='utf-8') as f:
+                json.dump(save_dict, f, ensure_ascii=False, indent=4)
 
 
 if __name__ == '__main__':
