@@ -22,7 +22,7 @@ ISMEAR = 1; SIGMA = 0.2
  LREAL = .FALSE.
  LWAVE = .FALSE.
 LCHARG = .FALSE.
-  NPAR = 16
+  NPAR = 4
 KSPACING = 0.314
 !
             cp ../CONTCAR POSCAR
