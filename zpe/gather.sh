@@ -66,7 +66,6 @@ do
             disp_f="${disp_f////}"
             disp_range=disp-\{${disp_s}..${disp_f}\}
             cat>phon.sh<<!
-#!/bin/sh
 phonopy -f $disp_range/vasprun.xml
 !
             chmod 777 phon.sh
@@ -91,56 +90,17 @@ MP = 31 31 31
                 echo "creating thermal_properties.yaml"
                 phonopy -t -p mesh.conf --tolerance=$tol --tmax 2000 > thermal.log
         fi
-        if [ ! -f pdos.conf ]; then
-                echo "creating pdos.conf"
-                atom_name=`sed '6q;d' POSCAR`
-                cat>pdos.conf <<!
-ATOM_NAME = $atom_name
-DIM = $dim
-PDOS = AUTO
-!
-        fi
-        if [ ! -f partial_dos.pdf ]; then
-                echo "creating partial_dos.pdf"
-                phonopy -s -p pdos.conf --tolerance=$tol
-        fi
-	if [ ! -f band.conf ]; then
-                echo "creating band.conf"
-                atom_name=`sed '6q;d' POSCAR`
-                cat>band.conf <<!
-ATOM_NAME = $atom_name
-DIM = $dim
-BAND = AUTO
-!
-        fi
-        if [ ! -f phonon_band.dat ]; then
-                 echo "creating phonon_band.dat"
-                 phonopy -p band.conf --tolerance=$tol
-        fi
-        if [ ! -f band.pdf ]; then
-                 phonopy -p -s band.conf --tolerance=$tol
-        fi
-        if [ ! -f band-pdos.conf ]; then
-                echo "creating band-pdos.conf"
-                atom_name=`sed '6q;d' POSCAR`
-                cat>band-pdos.conf <<!
-ATOM_NAME = $atom_name
-DIM = $dim
-BAND = AUTO
-PDOS = AUTO
-!
-        fi
-        if [ ! -f band_dos.pdf ]; then
-                 phonopy -p -s band-pdos.conf --tolerance=$tol
-        fi
         if [ ! -f phonon_band.pdf ]; then
                 echo "creaing phonon_band.pdf"
-                sumo-phonon-bandplot --dim $dim --height 6 --width 9 --dos total_dos.dat --symprec=$tol
+                python ~/cms-scripts/phonon-plots/config.py
+                phonopy -p band.conf
+                python ~/cms-scripts/phonon-plots/plot.py
         fi
-        rm mesh.yaml
+        if [ -f mesh.yaml ]; then
+                rm mesh.yaml
+        fi
         cd ..
     fi
     printf "$stat $phonstat \n"
     cd ..
 done
-
