@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--tol_max', type=float, default=0.5, help='Maximum tolerance')
     parser.add_argument('--system', type=int, default=1, help='Slurm config in inputs.py')
     parser.add_argument('--press', type=int, default=2000, help='pressure in kBar for subsequent VASP calculations')
-    parser.add_argument('--temp', nargs='+', default=[0, 500, 1000, 1500, 2000], help='Temperature on which Convex Hull is calculated')
+    parser.add_argument('--temp', nargs='+', default=[0], help='Temperature on which Convex Hull is calculated')
     parser.add_argument('--plot', type=boolean_string, default=False, help='Make 3d plots (some GUI required)')
     parser.add_argument('--red', type=str, choices=['none', 'reduce', 'super'], default='super', help='How to reduce structures')
     args = parser.parse_args()

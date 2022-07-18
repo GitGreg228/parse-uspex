@@ -106,7 +106,7 @@ done
         f.write(script)
 
 
-def phonopy(zpe_path, pressure):
+def phonopy(zpe_path):
     script = r"""#!/bin/sh
 
 for dir_name in `ls -d */`

@@ -348,6 +348,26 @@ def get_comp(structure, system):
     return comp, comp_r
 
 
+def get_X(comp_r):
+    if len(comp_r) == 2:
+        return np.round(comp_r[1] / (comp_r[0] + comp_r[1]), 3)
+    elif len(comp_r) == 3:
+        if not comp_r[0] and not comp_r[1]:
+            n_AB = 0
+            n_ABC = 0
+        else:
+            n_AB = comp_r[1] / (comp_r[0] + comp_r[1])
+            n_ABC = 1 - comp_r[2] / (comp_r[0] + comp_r[1] + comp_r[2])
+        x1, y1 = n_AB * np.sqrt(3) * np.cos(np.pi / 3) - np.sqrt(3) / 2, n_AB * np.sqrt(3) * np.sin(np.pi / 3) - 0.5
+        x2, y2 = np.sqrt(3) / 2, -0.5
+        a = n_AB * np.sqrt(3)
+        b = np.sqrt(np.square(x2 - x1) + np.square(y2 - y1))
+        c = np.sqrt(3)
+        alpha = np.arccos((np.square(c) + np.square(b) - np.square(a))/(2*b*c))
+        X1, X2 = np.sqrt(3) - b * n_ABC * np.cos(alpha) - np.sqrt(3) / 2, b * n_ABC * np.sin(alpha) - 0.5
+        return np.round(X1, 3), np.round(X2, 3)
+
+
 def get_x(comp):
     frac_0 = comp[0] / sum(comp)
     frac_1 = comp[1] / sum(comp)
@@ -360,24 +380,21 @@ def get_x(comp):
 
 class VaspDir(object):
     id = int()
+    system = list()
     # struc = Structure
 
-    def __init__(self, dir_path, zpe_path):
+    def __init__(self, dir_path, system, tol_min=0.01, tol_step=0.01, tol_max=0.5):
         self.id = int(os.path.basename(dir_path).split('_')[0].replace('EA', ''))
-        with open(os.path.join(zpe_path, '..', 'extended_convex_hull')) as f:
-            lines = f.readlines()
-        for line in lines:
-            try:
-                if self.id == int(line.split()[0]):
-                    structure = Structure(line)
-                    break
-            except ValueError:
-                pass
-        poscars = {str(self.id): Poscar(IStructure.from_file(os.path.join(dir_path, 'CONTCAR'))).__str__()}
-        # print(structure.comp_r, get_x(structure.comp_r), structure.X)
-        structure.struc(poscars)
-        structure.symm(save_dir=dir_path)
-        self.structure = structure.as_dict()
+        self.system = system
+        self.structure = dict()
+        pmg_struc = IStructure.from_file(os.path.join(dir_path, 'CONTCAR'))
+        self.structure['structure'] = pmg_struc.as_dict()
+        self.structure['composition'], self.structure['composition reduced'] = get_comp(pmg_struc, system)
+        self.structure['convex hull x'] = get_X(self.structure['composition reduced'])
+        self.structure['composition category'] = get_comp_cat(self.structure['composition reduced'])
+        self.structure['symmetry'] = analyze_symmetry(pmg_struc, tol_min, tol_step, tol_max, save_dir=dir_path)
+        self.structure['formula'] = parse_formula(pmg_struc)
+        self.structure['id'] = int(os.path.basename(dir_path).split('_')[0].replace('EA', ''))
 
 
 def load_ech(zpe_path):
@@ -485,11 +502,9 @@ def collect_zpe(zpe_path):
                 dirs.append(dir_)
                 structures_.append(IStructure.from_file(os.path.join(dir_, 'CONTCAR')))
     system = get_system(structures_)
-    for structure in structures_:
-        print(get_comp(structure, system))
     print('Processing VASP and phonopy calculations')
     for i in tqdm(range(len(dirs))):
-        vaspdir = VaspDir(dirs[i], zpe_path)
+        vaspdir = VaspDir(dirs[i], system)
         structures.append(vaspdir.structure)
         zpe_ids.append(vaspdir.id)
     zpe_ids_true = list()
@@ -567,7 +582,6 @@ def get_simplex(point, points, formula):
             break
         n = n - 1
         print(f'Problems with {formula}, decreasing n')
-    #print(get_normal(triangle), formula)
     return result
 
 
@@ -699,6 +713,19 @@ class ExtendedConvexHull(object):
         for structure in self.zpe_structures:
             x = structure['convex hull x']
             y = structure['convex hull y']
+            if self.dim == 3:
+                triangle = get_simplex(x, self.old_coords, structure['formula'])
+                if triangle.any() == 0:
+                    print(f'No triangle for {structure["formula"]}')
+                dist = distance_to_simplex(x, triangle, structure)
+                new_fitness = y - dist[-1]
+            elif self.dim == 2:
+                segment = get_simplex_2d(x, self.old_coords)
+                dist = distance_to_simplex_2d(x, y, segment)
+                new_fitness = y - dist
+            structure.update({'fitness': np.round(new_fitness, 4)})
+        for structure in self.zpe_structures:
+            x = structure['convex hull x']
             if self.t == 0:
                 y = structure['ZPE convex hull y']
             else:
