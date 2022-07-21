@@ -5,6 +5,7 @@ import yaml
 import numpy as np
 import pandas as pd
 
+from copy import deepcopy
 from functools import reduce
 from tqdm import tqdm
 from math import gcd
@@ -435,7 +436,11 @@ def get_system(structures):
     system = list()
     for structure in structures:
         species = set()
-        species = [specie.symbol for specie in structure.species if not (specie in species or species.add(specie))]
+        if isinstance(structure, dict):
+            _structure = IStructure.from_dict(structure['structure'])
+            species = [specie.symbol for specie in _structure.species if not (specie in species or species.add(specie))]
+        else:
+            species = [specie.symbol for specie in structure.species if not (specie in species or species.add(specie))]
         if len(species) > len(system):
             system = species
     comp_cat = get_comp_cat(system)
@@ -533,6 +538,22 @@ def collect_zpe(zpe_path):
     for structure in zpe_structures:
         get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs)
     return zpe_structures, system
+
+
+def get_binary_systems(zpe_structures):
+    sections = [list(), list(), list()]
+    systems = [list(), list(), list()]
+    structures = deepcopy(zpe_structures)
+    for structure in structures:
+        if structure['composition reduced'][0] == 0:
+            sections[0].append(structure)
+        if structure['composition reduced'][1] == 0:
+            sections[1].append(structure)
+        if structure['composition reduced'][2] == 0:
+            sections[2].append(structure)
+    for i, section in enumerate(sections):
+        systems[i] = get_system(section)
+    return sections, systems
 
 
 def get_zpe_ids(zpe_structures):
@@ -652,6 +673,20 @@ def get_stable_(hull, zpe_structures):
                 id = structure['id']
                 stable.append(f"{space_group}-{formula} (EA{str(id)})")
     return stable
+
+
+def get_simplex_comp(simplex, structures):
+    systems = list()
+    for idx in simplex:
+        formula = structures[idx]['formula']
+        split = re.split(r'(\d+)', formula)
+        system = str()
+        for word in split:
+            if word.isalpha():
+                system = system + word
+        if get_comp_cat(structures[idx]['composition reduced']) != 'single':
+            systems.append(system)
+    return set(systems)
 
 
 class ExtendedConvexHull(object):
@@ -826,7 +861,10 @@ class ExtendedConvexHull(object):
         ax.set_ylim(ylim)
         ax.set_zlim(zlim)
         points = self.new_coords
-        for triangle in points[self.new_hull.simplices]:
+        for simplex in self.new_hull.simplices:
+            triangle = points[simplex]
+            # comp = get_simplex_comp(simplex, self.zpe_structures)
+            # if len(comp) > 1:
             if np.all(triangle[:, -1] <= 0):
                 x1 = triangle[:, 0]
                 y1 = triangle[:, 1]
@@ -837,6 +875,11 @@ class ExtendedConvexHull(object):
 
 
 def get_convex_hulls(zpe_structures, system, temp, plot):
+    if len(system) == 3:
+        sections, systems = get_binary_systems(zpe_structures)
+        binary_echs = list()
+        for i, _system in enumerate(systems):
+            binary_echs.append(ExtendedConvexHull(sections[i], systems))
     if '0' not in temp:
         temp = ['0'] + temp
     for _t in temp:
