@@ -90,10 +90,13 @@ def main():
         else:
             print(f'Working with ZPE calculations in {zpe_path}')
             zpe_structures, system = collect_zpe(zpe_path)
-            zpe_structures = get_convex_hulls(zpe_structures, system, args.temp, args.plot)
+            zpe_path = os.path.join(zpe_path, 'RESULTS')
+            if not os.path.isdir(zpe_path):
+                os.mkdir(zpe_path)
+            zpe_structures = get_convex_hulls(zpe_structures, system, zpe_path, args.temp, args.plot, args.press)
             with open(os.path.join(zpe_path, 'zpe_structures.json'), 'w', encoding='utf-8') as f:
                 json.dump(zpe_structures, f, ensure_ascii=False, indent=4)
-            save_dict = save_zpe(zpe_structures, zpe_path, args.temp, system)
+            save_dict = save_zpe(zpe_structures, zpe_path, args.temp, system, args.press/10)
             with open(os.path.join(zpe_path, 'save_dict.json'), 'w', encoding='utf-8') as f:
                 json.dump(save_dict, f, ensure_ascii=False, indent=4)
 
