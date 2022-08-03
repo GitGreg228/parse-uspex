@@ -70,7 +70,7 @@ def main():
                                 'id': structure["id"],
                                 'stability': stability,
                                           }
-                            name = f'EA{structure["id"]}_{stability}_{formula}_{space_group}'
+                            name = f'EA{structure["id"]}_{formula}_{space_group}_{stability}'
                             dir_name = os.path.join(zpe_path, name)
                             if not os.path.isdir(dir_name):
                                 os.mkdir(dir_name)
@@ -82,21 +82,21 @@ def main():
                             with open(poscar, 'r') as f:
                                 lines = f.readlines()
                             with open(poscar, 'w') as f:
-                                lines[0] = f'EA{structure["id"]} {stability} {formula} {space_group}\n'
+                                lines[0] = f'EA{structure["id"]} {formula} {space_group}\n'
                                 f.writelines(lines)
                             compose_potcar(tmp_structure, specific_path, dir_name)
                             get_slurm_script(properties, system, dir_name)
                             write_incar('relaxation', properties, args.press, dir_name)
         else:
             print(f'Working with ZPE calculations in {zpe_path}')
-            zpe_structures, system = collect_zpe(zpe_path)
+            zpe_structures, system, pressure = collect_zpe(zpe_path)
             zpe_path = os.path.join(zpe_path, 'RESULTS')
             if not os.path.isdir(zpe_path):
                 os.mkdir(zpe_path)
-            zpe_structures = get_convex_hulls(zpe_structures, system, zpe_path, args.temp, args.plot, args.press)
+            zpe_structures = get_convex_hulls(zpe_structures, system, zpe_path, args.temp, args.plot, pressure)
             with open(os.path.join(zpe_path, 'zpe_structures.json'), 'w', encoding='utf-8') as f:
                 json.dump(zpe_structures, f, ensure_ascii=False, indent=4)
-            save_dict = save_zpe(zpe_structures, zpe_path, args.temp, system, args.press/10)
+            save_dict = save_zpe(zpe_structures, zpe_path, args.temp, system, pressure/10)
             with open(os.path.join(zpe_path, 'save_dict.json'), 'w', encoding='utf-8') as f:
                 json.dump(save_dict, f, ensure_ascii=False, indent=4)
 

@@ -75,13 +75,26 @@ def parse_formula(structure):
     return result.replace(' ', '')
 
 
-def formula_from_comp(comp, atoms):
+def formula_from_comp(comp, atoms, red=False):
     assert len(comp) == len(atoms)
+    if red:
+        if comp[0] > 1:
+            if (comp[0] & (comp[0] - 1) == 0) and comp[0] != 0:
+                comp[1] = float(comp[1] / comp[0])
+                comp[0] = 1
+            else:
+                floor = int(np.floor(comp[1] / comp[0]))
+                numerator = int(comp[1] - floor * comp[0])
+                if numerator > 0:
+                    comp[1] = f'{floor}' + r'\frac{' + f'{numerator}' + r'}{' + f'{int(comp[0])}' + r'}'
+                else:
+                    comp[1] = floor
+                comp[0] = 1
     formula = str()
     for i, a in enumerate(atoms):
-        if comp[i] > 0:
+        if not str(comp[i]) == '0':
             formula = formula + a
-            if comp[i] > 1:
+            if not str(comp[i]) == '1':
                 formula = formula + r'$_{' + str(comp[i]) + r'}$'
     return formula
 
@@ -514,6 +527,20 @@ def get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs):
         # print(structure['formula'], y)
 
 
+def get_pressure(dirs):
+    press = list()
+    for dir in dirs:
+        incar = os.path.join(dir, 'INCAR')
+        if os.path.isfile(incar):
+            with open(incar, 'r') as f:
+                for line in f.readlines():
+                    if 'PSTRESS' in line:
+                        press.append(int(line.split()[-1]))
+    if not len(set(press)) == 1:
+        print('WARNING: Different pressures found')
+    return press[0]
+
+
 def collect_zpe(zpe_path):
     structures = list()
     structures_ = list()
@@ -526,6 +553,7 @@ def collect_zpe(zpe_path):
             if fname.startswith('EA'):
                 dirs.append(dir_)
                 structures_.append(IStructure.from_file(os.path.join(dir_, 'CONTCAR')))
+    pressure = get_pressure(dirs)
     system = get_system(structures_)
     print('Processing VASP and phonopy calculations')
     for i in tqdm(range(len(dirs))):
@@ -557,7 +585,7 @@ def collect_zpe(zpe_path):
     old_ref_energies, ref_energies, ref_gibbs = get_ref_energies(system, zpe_structures)
     for structure in zpe_structures:
         get_new_y(structure, ref_energies, old_ref_energies, ref_gibbs)
-    return zpe_structures, system
+    return zpe_structures, system, pressure
 
 
 def get_zpe_ids(zpe_structures):
@@ -927,8 +955,8 @@ class ExtendedConvexHull(object):
                 x_new = structure['convex hull x']
                 y_new = structure['ZPE convex hull y'] if self.t == 0 else structure[
                     f'T = {str(self.t)} K convex hull y']
-                fit = round(float(structure['ZPE fitness']), 8) if self.t == 0 else round(
-                    float(structure[f'T = {str(int(self.t))} K fitness']), 8)
+                fit = round(float(structure['ZPE fitness']), 8) if self.t == 0 else \
+                    round(float(structure[f'T = {str(int(self.t))} K fitness']), 8)
                 comp_r = structure['composition reduced']
                 if 0.95 * xlim[0] <= x_new <= xlim[1]:
                     if fit <= 0:
@@ -940,7 +968,7 @@ class ExtendedConvexHull(object):
                         if y_new <= 0 and fit <= th:
                             # if comp_r[0] < 3:
                             x_ticks.append(x_new)
-                            x_labels.append(formula_from_comp(comp_r, self.system))
+                            x_labels.append(formula_from_comp(comp_r, self.system, red=True))
             points = np.asarray(points)
             hull = ConvexHull(points)
             for simplex in hull.simplices:
