@@ -419,6 +419,7 @@ class VaspDir(object):
         self.system = system
         self.structure = dict()
         pmg_struc = IStructure.from_file(os.path.join(dir_path, 'CONTCAR'))
+        self.structure['path'] = dir_path
         self.structure['structure'] = pmg_struc.as_dict()
         self.structure['composition'], self.structure['composition reduced'] = get_comp(pmg_struc, system)
         self.structure['convex hull x'] = get_X(self.structure['composition reduced'])
@@ -814,7 +815,7 @@ class ExtendedConvexHull(object):
         self.new_coords = np.asarray(new_coords)
         self.new_hull = ConvexHull(self.new_coords)
 
-    def get_new_fitness(self, sections=list()):
+    def get_new_fitness(self, sections=list(), print=True):
         section_id = list()
         section_old_fitness = list()
         section_fitness = list()
@@ -893,11 +894,11 @@ class ExtendedConvexHull(object):
                 formula = structure['formula']
                 id = structure['id']
                 self.new_stable.append(f"{space_group}-{formula} (EA{str(id)})")
-        print(f'\nOld stable structures are {", ".join(self.old_stable)}')
-        if self.t:
-            print(f'At T = {self.t} K, stable structures are {", ".join(self.new_stable)}\n')
-        else:
-            print(f'New stable structures are {", ".join(self.new_stable)}\n')
+        #print(f'\nOld stable structures are {", ".join(self.old_stable)}')
+        #if self.t:
+        #    print(f'At T = {self.t} K, stable structures are {", ".join(self.new_stable)}\n')
+        #else:
+        #    print(f'New stable structures are {", ".join(self.new_stable)}\n')
         return self.zpe_structures
 
     def plot(self, zpe_path=str(), plot=False, th=0.03, press=None):
@@ -909,6 +910,7 @@ class ExtendedConvexHull(object):
         ax.scatter(x_old, y_old, z_old, c=z_old, marker='^')
         """
         if self.dim == 2:
+            th = 1
             plt.figure(figsize=(16, 9))
             x_stable, x_unstable = list(), list()
             y_stable, y_unstable = list(), list()
@@ -1146,21 +1148,25 @@ def get_convex_hulls(zpe_structures, system, zpe_path, temp, plot, press):
     press = int(press / 10)
     antiseeds = dict()
     sections = list()
-    for _t in temp:
-        antiseeds[_t] = list()
+    new_temp = np.arange(0, 2010, 10)
+    for _t in new_temp:
+        antiseeds[f'{str(_t)}'] = list()
     if len(system) == 3:
         sections, systems = get_binary_systems(zpe_structures)
         binary_echs = list()
         for i, _system in enumerate(systems):
             if len(sections[i]) > 2:
-                for _t in temp:
+                print(f'Working on {"-".join(_system)} system')
+                for j in tqdm(range(len(new_temp))):
+                    _t = new_temp[j]
                     _ech = ExtendedConvexHull(sections[i], _system, t=_t)
                     # _ech.get_stable()
                     sections[i] = _ech.get_new_fitness()
-                    _ech.plot(zpe_path=zpe_path, press=press)
+                    if _t in temp:
+                        _ech.plot(zpe_path=zpe_path, press=press)
                     binary_echs.append(_ech)
                 save_dict = save_zpe(sections[i], zpe_path, temp, _system, press)
-                for _t in temp:
+                for _t in new_temp:
                     if int(_t) == 0:
                         fit = save_dict['ZPE fitness']
                     else:
@@ -1170,14 +1176,80 @@ def get_convex_hulls(zpe_structures, system, zpe_path, temp, plot, press):
                             antiseeds[f'{str(_t)}'].append(int(save_dict['EA'][i]))
     if '0' not in temp:
         temp = ['0'] + temp
-    for _t in temp:
-        ech = ExtendedConvexHull(zpe_structures, system, t=_t, antiseeds=antiseeds[_t])
+    print(f'Working on {"-".join(system)} system')
+    for j in tqdm(range(len(new_temp))):
+        _t = new_temp[j]
+        ech = ExtendedConvexHull(zpe_structures, system, t=_t, antiseeds=antiseeds[f'{str(_t)}'])
         zpe_structures = ech.get_new_fitness(sections)
-        ech.plot(zpe_path=zpe_path, plot=plot, press=press)
+        if int(_t) in temp:
+            ech.plot(zpe_path=zpe_path, plot=plot, press=press)
+    plot_fitness(zpe_structures, press, system)
     return zpe_structures
 
 
+def plot_fitness(zpe_structures, press, system):
+    plt.close('all')
+    print('Plotting total fitness')
+    for i in tqdm(range(len(zpe_structures))):
+        structure = zpe_structures[i]
+        fit = [round(1000 * float(structure['ZPE fitness']), 3)]
+        f = [round(structure['ZPE, eV/atom'], 6)]
+        g = [round(structure['new energy, eV/atom'], 6)]
+        y = [round(structure['ZPE convex hull y'], 6)]
+        new_temp = np.arange(0, 2010, 10)
+        for _t in new_temp:
+            if _t > 0:
+                fit.append(round(1000 * float(structure[f'T = {str(_t)} K fitness']), 3))
+                f.append(round(structure['F(T)'][str(_t)], 6))
+                g.append(round(structure['G(T)'][str(_t)], 6))
+                y.append(round(structure[f'T = {str(_t)} K convex hull y'], 6))
+        symmetry = structure['symmetry'][list(structure['symmetry'])[-1]][-1]
+        formula = formula_from_comp(structure['composition reduced'], system)
+        label = f'${symmetry}$-{formula}'
+        plt.figure(figsize=(9, 6))
+        font = {'weight': 'normal', 'size': 20}
+        matplotlib.rc('font', **font)
+        plt.plot(new_temp, fit, 'g--', label=label)
+        plt.legend()
+        plt.xlabel('T, K')
+        plt.ylabel('Fitness, meV/atom')
+        if max(fit) > 0:
+            plt.ylim(-0.1)
+        plt.title(f'Fitness(T) at P = {press} GPa')
+        plt.tight_layout()
+        plt.savefig(os.path.join(structure['path'], f'plot_fitness_{formula}_P={press}GPa.pdf'))
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(new_temp, y, 'g--', label=label)
+        plt.legend()
+        plt.xlabel('T, K')
+        plt.ylabel('Convex hull y, eV/atom')
+        plt.title(f'Convex hull y(T) at P = {press} GPa')
+        plt.tight_layout()
+        plt.savefig(os.path.join(structure['path'], f'plot_convex_hull_y_{formula}_P={press}GPa.pdf'))
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(new_temp, f, 'g--', label=label)
+        plt.legend()
+        plt.xlabel('T, K')
+        plt.ylabel('F, eV/atom')
+        plt.title(f'F(T) at P = {press} GPa')
+        plt.tight_layout()
+        plt.savefig(os.path.join(structure['path'], f'plot_f_{formula}_P={press}GPa.pdf'))
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(new_temp, g, 'g--', label=label)
+        plt.legend()
+        plt.xlabel('T, K')
+        plt.ylabel('G, eV/atom')
+        plt.title(f'G(T) at P = {press} GPa')
+        plt.tight_layout()
+        plt.savefig(os.path.join(structure['path'], f'plot_g_{formula}_P={press}GPa.pdf'))
+        plt.close('all')
+
+
 def save_zpe(zpe_structures, zpe_path, temp, system, press):
+    new_temp = np.arange(0, 2010, 10)
     press = int(press)
     save_dict = dict()
     save_dict.update(
@@ -1189,24 +1261,26 @@ def save_zpe(zpe_structures, zpe_path, temp, system, press):
     else:
         save_dict.update({'X1': [structure['convex hull x'][0] for structure in zpe_structures]})
         save_dict.update({'X2': [structure['convex hull x'][1] for structure in zpe_structures]})
-    save_dict.update({'E': [round(structure['energy, eV/atom'], 4) for structure in zpe_structures]})
-    save_dict.update({'ZPE': [round(structure['ZPE, eV/atom'], 4) for structure in zpe_structures]})
-    save_dict.update({'E+ZPE': [round(structure['new energy, eV/atom'], 4) for structure in zpe_structures]})
-    for _t in temp:
+    save_dict.update({'E': [round(structure['energy, eV/atom'], 6) for structure in zpe_structures]})
+    save_dict.update({'ZPE': [round(structure['ZPE, eV/atom'], 6) for structure in zpe_structures]})
+    save_dict.update({'E+ZPE': [round(structure['new energy, eV/atom'], 6) for structure in zpe_structures]})
+    for _t in new_temp:
         if int(_t) > 0:
-            save_dict.update({f'F at T = {str(_t)}': [round(structure['F(T)'][str(_t)], 4) for structure in zpe_structures]})
-            save_dict.update({f'E+F at T = {str(_t)}': [round(structure['G(T)'][str(_t)], 4) for structure in zpe_structures]})
-    save_dict.update({'Y': [round(structure['convex hull y'], 4) for structure in zpe_structures]})
-    save_dict.update({'ZPE Y': [round(structure['ZPE convex hull y'], 4) for structure in zpe_structures]})
-    for _t in temp:
+            save_dict.update({f'F at T = {str(_t)}': [round(structure['F(T)'][str(_t)], 6) for structure in zpe_structures]})
+    for _t in new_temp:
         if int(_t) > 0:
-            save_dict.update({f'Y at T = {str(_t)}': [round(structure[f'T = {str(_t)} K convex hull y'], 4) for
+            save_dict.update({f'E+F at T = {str(_t)}': [round(structure['G(T)'][str(_t)], 6) for structure in zpe_structures]})
+    save_dict.update({'Y': [round(structure['convex hull y'], 6) for structure in zpe_structures]})
+    save_dict.update({'ZPE Y': [round(structure['ZPE convex hull y'], 6) for structure in zpe_structures]})
+    for _t in new_temp:
+        if int(_t) > 0:
+            save_dict.update({f'Y at T = {str(_t)}': [round(structure[f'T = {str(_t)} K convex hull y'], 6) for
                                                       structure in zpe_structures]})
     save_dict.update({'Old fitness': [structure['fitness'] for structure in zpe_structures]})
-    save_dict.update({'ZPE fitness': [round(float(structure['ZPE fitness']), 10) for structure in zpe_structures]})
-    for _t in temp:
+    save_dict.update({'ZPE fitness': [round(float(structure['ZPE fitness']), 6) for structure in zpe_structures]})
+    for _t in new_temp:
         if int(_t) > 0:
-            save_dict.update({f'Fitness at T = {str(_t)}': [round(float(structure[f'T = {str(_t)} K fitness']), 10) for structure in zpe_structures]})
+            save_dict.update({f'Fitness at T = {str(_t)}': [round(float(structure[f'T = {str(_t)} K fitness']), 6) for structure in zpe_structures]})
     name = os.path.join(zpe_path, f'{"-".join(system)}_convex_hull_{press}GPa.csv')
     df = pd.DataFrame.from_dict(save_dict)
     df.to_csv(name, index=False, float_format='%.8f')
